@@ -1,0 +1,152 @@
+// This is a comment!
+/* This is a multiline comment! */
+
+/*  Some notes:
+	Return variables only stay in scope until the next function call.
+	There are three variable types:
+	    - memvar: Stored in memory. Can only be loaded and saved.
+		- savvar: Saved register variable. Persists through function calls.
+		- tmpvar: Temp register variable. Does not persist through calls.
+	You can retire a variable with `retire <name>;` This frees the resource
+	it uses to allow the underlying resource to be reused. This can only
+	happen in the same logical scope that 
+	Both register variable types can be coerced to a certain register with
+		<var> <name> = $<reg>.
+	Function arguments are tmpvars.
+	The variables ret0 and ret1 represent the first and second return values.
+	Using `return <value1> [, <value2>];` will just be translated to moving them.
+	They are set by a function as the functions return values.
+	
+	The variables `arg0`, `arg1`, etc. are the argument registers.
+	Note that `arg0` is `ret0`, and `arg1` is `ret1`
+																			*/
+
+
+
+
+func main() {
+	fib_iter(1000);
+	
+	while (1) {}
+}
+
+func memset(at, with, n) {
+	while (n > 0) {
+		store at[0] = with;
+		at += 4;
+		n -= 1;
+	}
+}
+
+func memcpy(src, dst, n) {
+	tmpvar data, i = 0;
+	n <<= 2;
+	while (i < n) {
+		data = load src[i];
+		store dst[i] = data;
+		i += 4;
+	}
+}
+
+func fib_iter(n) {
+	if (n < 2)
+		return n;
+	
+	tmpvar a = 0,
+		   b = 1,
+		   tmp;
+	
+	while (n >= 8) {
+		a += b;
+		b += a;
+		a += b;
+		b += a;
+		a += b;
+		b += a;
+		a += b;
+		b += a;
+		n -= 8;
+	}
+	
+	while (n >= 2) {
+		a += b;
+		b += a;
+		n -= 2;
+	}
+	
+	
+	if (n > 0) {
+		a += b;
+		return a;
+	}
+	
+	return b;
+}
+
+func get_addr(x, y) {
+	tmpvar addr = 0x8000;
+	
+	x <<= 2;
+	addr |= x;
+	
+	y <<= 9;
+	addr |= y;
+	
+	ret0 = addr;
+}
+
+func put_char(x, y, char) {
+	tmpvar addr = 0x8000;
+	
+	x <<= 2;
+	addr |= x;
+	
+	y <<= 9;
+	addr |= y;
+	
+	store addr[0] = char;
+}
+
+func put_str(x, y, str, len) {
+	// Compute start address.
+	tmpvar addr = 0x8000;
+	x <<= 2;
+	addr |= x;
+	y <<= 9;
+	addr |= y;
+	
+	while (len > 0) {
+		tmpvar char;
+		char = load str[0];
+		char &= 0xff;
+		
+		store addr[0] = char;
+		
+		addr += 4;
+		str += 1;
+		len -= 1;
+	}
+}
+
+func multiply(x, y) {
+	tmpvar result = 0;
+	
+	while (x > 0) {
+		tmpvar low_bit = x & 1;
+		
+		if (low_bit != 0) {
+			result += y;
+		}
+		
+		x >>= 1;
+		y <<= 1;
+	}
+}
+
+
+
+#(include "test-include.cmm")
+#(include "test-include.cmm")
+#(include "test-include.cmm")
+#(include "test-include.cmm")
+#(include "test-include.cmm")
