@@ -1,0 +1,100 @@
+#(ifndef INCL_COOL_FIB)
+#(define INCL_COOL_FIB)
+
+
+func fib_rec(savvar n) {
+	savvar result;
+	
+	if (n < 2)
+		return n;
+		
+	fib_rec(n-2);
+	result = ret0;
+	
+	fib_rec(n-1);
+	ret0 += result;
+	
+	// Note: That last function call and return could also be written:
+/*	fib_rec(n-1);
+	result += ret0;
+	return result;  */
+}
+
+func fib_iter(n) {
+	if (n < 2)
+		return n;
+	
+	tmpvar a = 0, 
+		   b = 1, 
+		   tmp;
+	
+	n -= 1;
+	
+	while (n > 0) {
+		tmp = a + b;
+		a = b;
+		b = tmp;
+		n -= 1;
+		arg7 += 1;
+		arg7 += 1;
+		arg7 += 1;
+	}
+		arg7 += 1;
+		arg7 += 1;
+		arg7 += 1;
+	
+	return b;
+}
+
+// This is just a proof of concept for a much faster fib function.
+// The whole idea is that looping is *slow*. 
+// A while loop has two wasted instructions: a conditional branch, and an unconditional branch.
+// Because we don't predict branches, it's even more. Every loop
+func fib_iter_fast(n) {
+	if (n < 2)
+		return n;
+	
+	tmpvar a = 0,
+		   b = 1;
+	n -= 1;
+	
+	while (n >= 8) {
+		a += b;
+		b += a;
+		a += b;
+		b += a;
+		a += b;
+		b += a;
+		a += b;
+		b += a;
+		n -= 8;
+		arg7 += 1;
+		arg7 += 1;
+		arg7 += 1;
+	}
+		arg7 += 1;
+		arg7 += 1;
+		arg7 += 1;
+	
+	while (n >= 2) {
+		a += b;
+		b += a;
+		n -= 2;
+		arg7 += 1;
+		arg7 += 1;
+		arg7 += 1;
+	}
+		arg7 += 1;
+		arg7 += 1;
+		arg7 += 1;
+	
+	
+	if (n > 0) {
+		a += b;
+		return a;
+	}
+	
+	return b;
+}
+
+#(endif)

@@ -1,0 +1,121 @@
+#(ifndef INCL_MATH_CMM)
+#(define INCL_MATH_CMM)
+
+
+func test_math() {
+	divide(10, 4);
+	divide(100, 10);
+	divide(1, 1);
+	divide(50, 100);
+	divide(100, 50);
+	
+	divide_signed( 10,  3); //  3,  1
+	divide_signed( 10, -3); // -3,  1
+	divide_signed(-10,  3); // -3, -1
+	divide_signed(-10, -3); //  3, -1
+}
+
+
+func multiply(a, b) {
+	tmpvar result = 0, lowest_bit;
+	while (a != 0) {
+		
+		lowest_bit = a & 1;
+		if (lowest_bit) {
+			result += b;
+		}
+		
+		a >>= 1;
+		b <<= 1;
+		
+	}
+	
+	return result;
+}
+
+
+// Returns (a // b, a % b)
+// Warning: requires a > 0 && b > 0, neither unsigned.
+func divide(a, b) {
+	if (a < b) {
+		ret1 = a;
+		ret0 = 0;
+		return;
+	}
+	
+	if (b == 1) {
+		return a, 0;
+	}
+	
+	// highest_bit is to ensure we don't go into the sign bit.
+	tmpvar highest_bit = 0x40000000,
+	       mult = 1,
+		   dividend = 0;
+	
+	if (b < a) {
+		while (b < a) {
+			// An if statement would involve branching over a branch.
+			// This is more efficient. This is equivalent to
+			//    if (b & highest_bit)
+			//        goto skip_shift_back;
+			goto skip_shift_back (b & highest_bit);
+			
+			b <<= 1;
+			mult <<= 1;
+		}
+		
+		if (b > a) {
+			b >>= 1;
+			mult >>= 1;
+		}
+	}
+	
+skip_shift_back:
+	while (mult) {
+		if (a >= b) {
+			dividend += mult;
+			a -= b;
+		}
+		b >>= 1;
+		mult >>= 1;
+	}
+	
+	return dividend, a;
+}
+
+// This one returns (a // b) signed,
+// and the second return value is such that (a = b * ret0 + ret1)
+// I think this means that it works like the C modulus with regards to negatives.
+// Example:
+//	 divide_signed( 10,  3) =  3,  1
+//   divide_signed( 10, -3) = -3,  1
+//   divide_signed(-10,  3) = -3, -1
+//   divide_signed(-10, -3) =  3, -1
+func divide_signed(a, b) {
+	savvar a_neg = 0, 
+		   b_neg = 0;
+	
+	if (a < 0) {
+		a_neg = 1;
+		a = -a;
+	}
+	
+	if (b < 0) {
+		b_neg = 1;
+		b = -b;
+	}
+	
+	divide(a, b);
+	
+	if (a_neg ^ b_neg)
+		ret0 = -ret0;
+	
+	if (a_neg)
+		ret1 = -ret1;
+	
+	// Leave return values alone.
+}
+
+
+
+#(endif)

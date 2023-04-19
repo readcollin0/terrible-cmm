@@ -1,0 +1,31 @@
+#(ifndef INC_COOL_MEM)
+#(define INC_COOL_MEM)
+
+
+func set_increasing(addr, start, n) {
+	while (n > 0) {
+		store addr[0] = start;
+		addr += 4;
+		start += 1;
+		n -= 1;
+	}
+}
+
+
+func add_arrays(src1, src2, dst, n) {
+	tmpvar sum, tmp;
+	while (n > 0) {
+		sum = load src1[0];
+		tmp = load src2[0];
+		sum += tmp;
+		store dst[0] = sum;
+		
+		src1 += 4;
+		src2 += 4;
+		dst += 4;
+		n -= 1;
+	}
+}
+
+
+#(endif)
