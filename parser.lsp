@@ -214,15 +214,28 @@
 					(when (parse-base ,cannot-be)
 						(fail-parse))
 					,result)))))
-				
+
+(defun parse-code-int (str)
+	(let* ((negative (eq #\- (char str 0)))
+		   (str (if negative (subseq str 1) str))
+		   (base (if (> (length str) 2)
+					 (alexandria:switch ((subseq str 0 2) :test #'equalp)
+							("0x" 16)
+							("0b" 2)
+							("0o" 8)
+							(t 10))
+					 10))
+		   (str (if (= base 10) str (subseq str 2)))
+		   (num (parse-integer str :radix base :junk-allowed t)))
+		(when (numberp num)
+			(if negative
+				(- num)
+				num))))
+
 (defparser-helper parse-int (to-parse)
 	(with-gensyms (result)
 		`(alexandria:when-let ((,result (parse-base ,to-parse)))
-			(cond ((string-contains-at ,result 0 "0x")
-						(parse-integer (subseq ,result 2) :radix 16))
-				  ((string-contains-at ,result 0 "0b")
-						(parse-integer (subseq ,result 2) :radix 2))
-				  (t (parse-integer ,result))))))
+			(parse-code-int ,result))))
 
 
 
@@ -357,9 +370,21 @@
 	(let ((var-cont (preproc-get-var-cont var)))
 		(setf *preproc-vars* (delete var-cont *preproc-vars*))))
 
+(defun eval-preproc (form)
+	(eval `(let (,@(loop for var in *preproc-vars*
+						 collect `(,(car var) ,(cdr var))))
+				,@(loop for var in *preproc-vars*
+						collect `(declare (ignorable ,(first var))))
+				,form)))
 
 (defun-preproc define (name &optional value)
-	(preproc-create-var name value))
+	(let* ((int-parsed (when (symbolp value) 
+							 (parse-code-int (string value))))
+		   (value (or int-parsed value)))
+		(preproc-create-var name
+							(if (not (atom value))
+								(eval-preproc value)
+								value))))
 
 (defun-preproc undef (name)
 	(preproc-remove-var name))
@@ -491,8 +516,7 @@
 	
 	(global (list identifier "=" global-val ";"))
 	(global-val (or-type string number array))
-	(array (list array-type "array" (or-type array-size array-content)))
-	(array-type (or "byte" "half" "word" "dword"))
+	(array (list "array" (or-type array-size array-content)))
 	(array-size (list "[" number "]"))
 	(array-content (list "{" (delimited "," number :at-least-one t) "}"))
 	(string (regex "\"([^\\\"]|\\[\\\"nt])*\""))
@@ -545,10 +569,10 @@
 	(empty ";")
 	
 	(identifier (disallow (regex "[a-zA-Z_][a-zA-Z0-9_]*") 
-						  (or "func" "if" "while" "tmpvar" "savvar" "memvar" "do" "else" "return")))
+						  (or "func" "if" "while" "tmpvar" "savvar" "memvar" "do" "else" "return" "goto" "array")))
 	(vartype (or "memvar" "savvar" "tmpvar"))
 	;(register (regex "\\$[a-zA-Z0-9]+"))
-	(number (parse-int (regex "-?(0x[0-9a-f]+|0b[01]+|[0-9]+)"))))
+	(number (parse-int (regex "(?i)-?(0x[0-9a-f]+|0b[01]+|[0-9]+)"))))
 
 
 (defun replace-nil-symbol (parsed)
@@ -573,6 +597,10 @@
 (defparameter *compiler-global-variables* nil)
 (defparameter *compiler-data-segment* nil)
 
+(defparameter *compiler-use-static-locations* nil)
+(defparameter *compiler-data-segment-addr* nil)
+
+
 (defparameter *compiler-vars* `(("zero" reg perm zero)
 								("arg0" reg perm a0)
 								("arg1" reg perm a1)
@@ -585,13 +613,15 @@
 								("ret0" reg perm a0)
 								("ret1" reg perm a1)
 								("register_tp" reg perm tp)
-								("register_gp" reg perm gp)))  ; Base variables, plus shadowed for scopes.
+								("register_gp" reg perm gp)
+								("register_sp" reg perm sp)))  ; Base variables, plus shadowed for scopes.
 (defparameter *compiler-used-saved-regs* nil)		; To be shadowed for saving
 (defparameter *compiler-label-count* 0)
 (defparameter *compiler-available-stack* nil)
 (defparameter *compiler-stack-var-count* 0)
 (defparameter *compiler-return-label* nil)
 (defparameter *compiler-break-target* nil)
+(defparameter *compiler-called-functions* nil)
 
 (defparameter *compiler-labels* nil)
 
@@ -684,7 +714,7 @@
 	(* amount (ceiling val amount)))
 
 (defun compile-local-array (decl)
-	(let* ((size (second (second decl)))
+	(let* ((elements (second (second decl)))
 		   (real-size (int-ceiling size 4))
 		   (var-name (third decl))
 		   (stack-spots-taken (ash real-size -2))
@@ -762,6 +792,7 @@
 (defun make-simple-assignment (dst src)
 	(let ((dst-var (get-var dst))
           (src-var (get-var src)))
+		(check-var-type dst dst-var 'reg "Cannot assign to non-register: ~A")
 		(if (numberp src)
 			`(move ,(fourth dst-var) ,src)
 			(if src-var
@@ -827,7 +858,7 @@
 				(if (numberp cond-expr)					
 					(let ((invert (to-bool invert))
 						  (is-zero (to-bool (= cond-expr 0))))
-						(list 'branch (if (eq invert is-zero) 'always 'never)))
+						(list 'branch (if (eq invert is-zero) 'always 'never) 0 0 target-num))
 					(let ((var (get-var cond-expr)))
 						(check-var-type cond-expr var 'reg "Cannot branch on variable: ")
 						`(branch ,(if invert '== '!=) ,(fourth var) zero ,target-num))))
@@ -856,10 +887,10 @@
 	      (body-stmt (third while))
 		  (end-label (make-label 'branch "while_end")))
 		(let ((*compiler-break-target* end-label))
-			(list loop-label
-				  (compile-conditional-branch bool-expr end-label :invert t)
+			(list (compile-conditional-branch bool-expr end-label :invert t)
+				  loop-label
 				  (compile-statement body-stmt)
-				  (compile-unconditional-branch loop-label)
+				  (compile-conditional-branch bool-expr loop-label)
 				  end-label))))
 
 (defun compile-retire (retire)
@@ -890,6 +921,7 @@
 	(pushnew 'ra *compiler-used-saved-regs*)
 	(let ((target (first function-call))
 	      (args   (remove-delimiter (third function-call))))
+		(pushnew target *compiler-called-functions* :test #'equal)
 		(if (equal '(nil) args)
 			`(call ,target)
 			(list (loop for arg in args
@@ -984,56 +1016,111 @@
 						 *compiler-break-target*
 						 *riscv-saved-regs*
 						 *riscv-temp-regs*
-						 *riscv-arg-regs*)
+						 *riscv-arg-regs*
+						 *compiler-called-functions*)
 			(let* ((*compiler-return-label* (make-label 'return name))
 				   (arg-setup (compile-func-args args))
 				   (comp-body (compile-statement body))
 				   (used-stack-space (+ *compiler-stack-var-count* (length *compiler-used-saved-regs*))))
-				`(,(make-label 'function name)
-				  (stack-space ,used-stack-space)
-				  (backup-regs ,*compiler-stack-var-count* ,@*compiler-used-saved-regs*)
-				  ,arg-setup
-				  ,comp-body
-				  ,*compiler-return-label*
-				  (restore-regs ,*compiler-stack-var-count* ,@*compiler-used-saved-regs*)
-				  (stack-space ,(- used-stack-space))
-				  (return))))))
+				(list 
+					name
+					(nreverse *compiler-called-functions*)
+					`(,(make-label 'function name)
+						  (stack-space ,used-stack-space)
+						  (backup-regs ,*compiler-stack-var-count* ,@*compiler-used-saved-regs*)
+						  ,arg-setup
+						  ,comp-body
+						  ,*compiler-return-label*
+						  (restore-regs ,*compiler-stack-var-count* ,@*compiler-used-saved-regs*)
+						  (stack-space ,(- used-stack-space))
+						  (return)))))))
 
 
 (defun compile-global-array-designator (val)
-	(let ((data-size (first val))
-		  (init-type (first (third val)))
-		  (init-cont (second (third val))))
+	(let ((init-type (first (second val)))
+		  (init-cont (second (second val))))
 		(alexandria:eswitch (init-type)
-			('array-size `(,data-size ,(second init-cont)))
-			('array-content `(,data-size ,(remove-delimiter (second init-cont)))))))
+			('array-size (second init-cont))
+			('array-content (remove-delimiter (second init-cont))))))
+
+(defun compiler-next-data-spot ()
+	(+ *compiler-data-segment-addr*
+	   (* 4 (loop for global in *compiler-global-variables*
+				  summing (let ((value (third global)))
+							(alexandria:eswitch ((second global))
+							  ('value 1)
+							  ('string (length value))
+							  ('array (if (listp value)
+										  (length value)
+										  value))))))))
+
+(defun trim-first-last (list)
+	(let ((len (length list)))
+		(subseq list 1 (1- len))))
 
 (defun compile-global (global)
 	(let* ((identifier (first global))
 		   (type (first (third global)))
 		   (value (second (third global)))
 		   (label (make-label 'global identifier))
-		   (label-num (third label)))
+		   (label-num (third label))
+		   (variable-spot (if *compiler-use-static-locations*
+							  (compiler-next-data-spot)
+							  label-num)))
 		(push label *compiler-data-segment*)
 		(alexandria:eswitch (type)
-			('string (push `(global string ,value) *compiler-data-segment*)
-					 (push `(,identifier addr string ,label-num) *compiler-global-variables*))
+			('string (push `(global string ,(trim-first-last value)) *compiler-data-segment*)
+					 (push `(,identifier addr string ,variable-spot) *compiler-global-variables*))
 			('number (push `(global number ,value) *compiler-data-segment*)
-					 (push `(,identifier value number ,label-num) *compiler-global-variables*))
+					 (push `(,identifier value number ,variable-spot) *compiler-global-variables*))
 			('array  (push `(global array ,(compile-global-array-designator value)) *compiler-data-segment*)
-					 (push `(,identifier addr array ,label-num) *compiler-global-variables*)))
+					 (push `(,identifier addr array ,variable-spot) *compiler-global-variables*)))
 		nil))
-					 
 
-(defun compile-to-intermediate (program)
-	(let ((prog (loop for part in program
-					  collect (alexandria:eswitch ((first part))
-								('func-def (compile-func (second part)))
-								('global (compile-global (second part)))))))
-		(list '(segment data)
-			   (nreverse *compiler-data-segment*)
-			   '(segment text)
-			   prog)))
+
+		
+(defun get-used-functions (funcs &key (init-func "main"))
+	(let ((used-code nil) ; 
+		  (used-names))
+		(labels ((get-func (name) (find name funcs :key #'first :test #'equal))
+				 (get-used (name) (find name used-names :test #'equal))
+				 (add-func (func)
+						(push (third func) used-code)
+						(push (first func) used-names))
+				 (check-func (name)
+						(when (not (get-used name))
+							 (let ((func (get-func name)))
+								(add-func func)
+								(check-called func))))
+				 (check-called (func)
+						(loop for called in (second func) 
+							  do (check-func called))))
+			(check-func init-func)
+			(nreverse used-code))))
+			
+
+(defun compile-to-intermediate (program &key init-stack trim-functions use-static-data data-segment-start)
+	(shadow-globals (*compiler-global-variables*
+					 *compiler-use-static-locations*
+					 *compiler-data-segment-addr*)
+		(when use-static-data
+			(check-not-nil data-segment-start)
+			(setf *compiler-use-static-locations* t)
+			(setf *compiler-data-segment-addr* data-segment-start))
+		(let* ((functions nil)
+		       (prog (loop for part in program
+						   collect (alexandria:eswitch ((first part))
+									('func-def (progn (push (compile-func (second part)) 
+															functions)
+													  nil))
+									('global (compile-global (second part)))))))
+			(list '(segment data)
+				  (nreverse *compiler-data-segment*)
+				  '(segment text)
+				  (when init-stack `(move sp ,init-stack))
+				  (if trim-functions
+					  (get-used-functions functions)
+					  (mapcar #'third (nreverse functions)))))))
 
 
 
@@ -1140,7 +1227,10 @@
 			(let (,@(loop for let in lets collect `(,(first let) (if ,cond-result ,(second let) ,(first let)))))
 				,@body))))
 
-(defun translate-intermediate-instr (instr)
+(defun to-comma-sep-list (list)
+	(format nil "~{~A~^,~}" list))
+
+(defun translate-intermediate-instr (instr &key use-static-data)
 	(alexandria:switch ((first instr))
 		('segment 
 			(alexandria:eswitch ((second instr))
@@ -1218,9 +1308,11 @@
 								(list (format nil "    add tp, ~a, ~a" mem-src1-str (reg-to-string mem-src2))
 								      (format nil "    ~a ~a, ~a(tp)" type-instr reg-str (or num-index 0))))))
 					('lbl 
-						(let ((label-name (get-label-from-num mem-src1)))
+						(let* ((label-name (get-label-from-num mem-src1)))
 							(if mem-src2
-								(list (format nil "    la tp, ~a" label-name)
+								(list (if use-static-data
+										  (format nil "    li tp, ~a" mem-src1)
+									      (format nil "    la tp, ~a" label-name))
 									  (if (numberp mem-src2)
 										  (if (num-in-bit-range 12 mem-src2)
 											  (format nil "    ~a ~a, ~a(tp)" type-instr reg-str mem-src2)
@@ -1228,22 +1320,20 @@
 										  (list (format nil "    add tp, tp, ~a" (reg-to-string mem-src2))
 									            (format nil "    ~a ~a, ~a(tp)" type-instr reg-str (or num-index 0)))))
 								(if (eq 'load type)
-									(format nil "    la ~a, ~a" reg-str label-name)
+									(if use-static-data
+										(format nil "    li ~a, ~a" reg-str mem-src1)
+										(format nil "    la ~a, ~a" reg-str label-name))
 									(error "Cannot write to array-type variables!"))))))))
 		('global
 			(let ((type (second instr))
 				  (arg  (third instr)))
 				(alexandria:eswitch (type)
 					('number (format nil "    .word ~a" (num-to-string arg)))
-					('string (format nil "    .string ~a" arg))
-					
-					
-					
-					;('array (format nil "    .byte 0~a" (repeat-string ",0" (1- arg))))
-					('array (format nil "    .~a ~a" (first arg)
-					                                 (if (listp (second arg))
-														 (format nil "~{~d~^,~}" (second arg))
-														 (format nil "~v@{~A,~:*~}0" (1- (second arg)) 0)))))))
+					('string (format nil "    .word ~a" (let ((codes (map 'list #'char-code arg)))
+															  (to-comma-sep-list codes))))
+					('array (format nil "    .word ~a"  (if (listp arg)
+															(format nil "~{~d~^,~}" arg)
+															(format nil "~v@{~A,~:*~}0" (1- arg) 0)))))))
 		('.globl (format nil ".globl ~a" (second instr)))
 						 
 		(t instr)))
@@ -1264,10 +1354,10 @@
 		if (eq 'label (first instr))
 		do (create-label instr)))
 
-(defun translate-to-asm (intermediate)
+(defun translate-to-asm (intermediate &key use-static-data)
 	(prepass-create-labels intermediate)
 	(loop for instr in intermediate
-		collect (translate-intermediate-instr instr)))
+		collect (translate-intermediate-instr instr :use-static-data use-static-data)))
 		
 
 
@@ -1281,15 +1371,24 @@
 								  :if-does-not-exist :create)
 		(format out "~A" string)))
 
-(defun full-compile (in-file out-file &key debug-preproc preproc-out debug-parse)
+(defun full-compile (in-file out-file &key init-stack 		; Adds an instruction to initialize stack pointer
+										   trim-functions	; Trims unused functions (while also ordering them by use)
+										   debug-preproc	; Runs the preprocessor debugging
+										   preproc-out		; The place to put the preprocessed code
+										   debug-parse		; Prints detailed parsing heirarchy
+										   use-static-data	; Load globals based on stack offset instead of label
+										   data-segment-start)	; Start of data segment (number). Required for ^
 	(let ((*parser-debug-print* debug-parse))
 		(let* ((file-lines (uiop:read-file-lines in-file))
 			   (comp-unit (preprocess file-lines))
 			   (parsed (parse-program comp-unit :use-whole-string t))
 			   (replaced (replace-nil-symbol parsed))
-			   (intermediate (compile-to-intermediate replaced))
+			   (intermediate (compile-to-intermediate replaced :init-stack init-stack 
+															   :use-static-data use-static-data
+															   :data-segment-start data-segment-start
+															   :trim-functions trim-functions))
 			   (flat-interm (flatten-intermediate intermediate))
-			   (translated (translate-to-asm flat-interm))
+			   (translated (translate-to-asm flat-interm :use-static-data use-static-data))
 			   (final-asm (flatten-asm translated)))
 			(when debug-preproc
 				  (format t "Preprocessed text: ~%~A~%" comp-unit))

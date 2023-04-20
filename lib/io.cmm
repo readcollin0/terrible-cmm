@@ -1,0 +1,99 @@
+#(ifndef INCL_IO_CMM)
+#(define INCL_IO_CMM)
+
+#(include "lib/mmio_const.cmm")
+
+func io_set_leds(val) {
+	tmpvar addr = MMIO_LED;
+	store addr[0] = val;
+}
+
+func io_set_7seg(val) {
+	tmpvar addr = MMIO_7SEG,
+		   mask = 0xffff;
+	val &= mask;
+	store addr[0] = val;
+}
+
+func io_get_buttons() {
+	tmpvar addr = MMIO_BUTTON;
+	ret0 = load addr[0];
+}
+
+func io_uart_write_str(savvar str, savvar len) {
+	tmpvar char;
+	
+	while (len > 0) {
+		char = load str[0];
+		io_uart_write(char);
+		str += 4;
+		len -= 1;
+	}
+}
+
+func io_uart_write_num(savvar num) {
+	savvar mask = 0xf0000000;
+	savvar n = 8;
+	
+	while (n > 0) {
+		tmpvar char = num & mask;
+		char >>= 28;
+		char += 0x30;
+		
+		if (char > 0x39)
+			char += 0x27;
+		
+		io_uart_write(char);
+		
+		n -= 1;
+		num <<= 4;
+	}
+}
+
+func io_uart_write_newline() {
+	io_uart_write(0xa);
+	io_uart_write(0xd);
+}
+
+func io_uart_display_num(str, len, savvar num) {
+	io_uart_write_str(str, len);
+	io_uart_write(0x3a);
+	io_uart_write(0x20);
+	io_uart_write_num(num);
+	io_uart_write_newline();
+}
+
+func io_uart_write(char) {
+	tmpvar tx_addr = MMIO_TX, busy;
+	do {
+		busy = load tx_addr[0];
+	} while (busy);
+	store tx_addr[0] = char;
+}
+
+
+
+
+last_buttons = 0;
+func io_get_pressed_buttons() {
+	tmpvar addr = MMIO_BUTTON,
+		   buttons;
+	buttons = load addr[0];
+	
+	tmpvar last;
+	last = load last_buttons;
+	last ^= -1; // NOT pressed last time
+	last &= buttons; // We want pressed now, and not pressed last time.
+	
+	store last_buttons = buttons;
+	
+	return last;
+}
+
+func io_wait_for_button_press() {
+	ret0 = 0;
+	while (ret0 == 0)
+		io_get_pressed_buttons();
+}
+
+#(endif)

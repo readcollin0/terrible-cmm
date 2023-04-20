@@ -1,0 +1,26 @@
+#(ifndef INCL_TIMER_CMM)
+#(define INCL_TIMER_CMM)
+
+#(include "lib/mmio_const.cmm")
+
+func timer_init() {
+	tmpvar addr = MMIO_TIMER;
+	store addr[0] = zero; // "zero" is a permanent variable that is always zero.
+}
+
+timer_last_tick = 0;
+func timer_wait_for_tick(interval) {
+	tmpvar addr = MMIO_TIMER;
+	tmpvar timer, until;
+	
+	until = load timer_last_tick;
+	until += interval;
+	
+	do {
+		timer = load addr[0];
+	} while (timer < until);
+	
+	store timer_last_tick = until;
+}
+
+#(endif)

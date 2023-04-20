@@ -1,0 +1,46 @@
+#(ifndef INCL_MMIO_CMM)
+#(define INCL_MMIO_CMM)
+
+#(define MMIO_START 0x7f00)
+
+#(define MMIO_LED_OFFSET 0x00)
+#(define MMIO_SWITCH_OFFSET 0x04)
+#(define MMIO_TX_OFFSET 0x08)
+#(define MMIO_RX_DATA_OFFSET 0x10)
+#(define MMIO_RX_STATUS_OFFSET 0x14)
+#(define MMIO_7SEG_OFFSET 0x18)
+#(define MMIO_BUTTON_OFFSET 0x24)
+#(define MMIO_TIMER_OFFSET 0x30)
+#(define MMIO_CHAR_COLOR_OFFSET 0x34)
+
+
+#(define MMIO_LED 0x7f00)
+#(define MMIO_SWITCH 0x7f04)
+#(define MMIO_TX 0x7f08)
+#(define MMIO_RX_DATA 0x7f10)
+#(define MMIO_RX_STATUS 0x7f14)
+#(define MMIO_7SEG 0x7f18)
+#(define MMIO_BUTTON 0x7f24)
+#(define MMIO_TIMER 0x7f30)
+#(define MMIO_CHAR_COLOR 0x7f34)
+
+
+#(define MMIO_VGA_BASE 0x8000)
+#(define MMIO_VGA_MAX 0xc000)
+#(define MMIO_VGA_ROW_SHIFT 9)
+#(define MMIO_VGA_COL_SHIFT 2)
+#(define MMIO_VGA_ROW_OFFSET (ash 1 MMIO_VGA_ROW_SHIFT))
+#(define MMIO_VGA_COL_OFFSET (ash 1 MMIO_VGA_COL_SHIFT))
+#(define MMIO_VGA_COL_ZERO_MASK 0xfffffe03)
+#(define MMIO_VGA_ROW_ZERO_MASK 0xffffc1ff)
+#(define MMIO_VGA_WIDTH 80)
+#(define MMIO_VGA_HEIGHT 30)
+
+
+#(define MMIO_BTNC_MASK 1)
+#(define MMIO_BTNL_MASK 2)
+#(define MMIO_BTND_MASK 4)
+#(define MMIO_BTNR_MASK 8)
+#(define MMIO_BTNU_MASK 16)
+
+#(endif)

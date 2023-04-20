@@ -1,0 +1,69 @@
+#(ifndef INCL_DRAW_CMM)
+#(define INCL_DRAW_CMM)
+
+#(include "lib/mmio_const.cmm")
+
+func draw_get_addr(x, y) {
+	tmpvar addr = MMIO_VGA_BASE;
+	x <<= 2;
+	addr |= x;
+	y <<= 9;
+	addr |= y;
+}
+
+func draw_char_at(x, y, char) {
+	tmpvar addr = MMIO_VGA_BASE;
+	x <<= 2;
+	addr |= x;
+	y <<= 9;
+	addr |= y;
+	
+	store addr[0] = char;
+}
+
+func draw_set_color(fg, bg) {
+	tmpvar addr = MMIO_CHAR_COLOR;	
+	bg <<= 12;
+	
+	tmpvar color = fg | bg;
+	store addr[0] = color;
+}
+
+func draw_str_at(x, y, str, len) {
+	tmpvar addr = MMIO_VGA_BASE;
+	x <<= MMIO_VGA_COL_SHIFT;
+	addr |= x;
+	y <<= MMIO_VGA_ROW_SHIFT;
+	addr |= y;
+	
+	while (len > 0) {
+		tmpvar char;
+		
+		char = load str[0];
+		char &= 0xff;
+		store addr[0] = char;
+		len -= 1;
+		addr += 4;
+		str += 4;
+	}
+}
+
+func draw_fill_background(char) {
+	tmpvar ptr = MMIO_VGA_BASE;
+	tmpvar x = 0, y = 0;
+	
+	while (y < MMIO_VGA_HEIGHT) {
+		while (x < MMIO_VGA_WIDTH) {
+			store ptr[0] = char;
+			ptr += MMIO_VGA_COL_OFFSET;
+			x += 1;
+		}
+		
+		x = 0;
+		ptr &= MMIO_VGA_COL_ZERO_MASK;
+		ptr += MMIO_VGA_ROW_OFFSET;
+		y += 1;
+	}
+}
+
+#(endif)
